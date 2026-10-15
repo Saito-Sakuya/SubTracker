@@ -61,16 +61,13 @@ function applyOptionalBindings(config, { enableR2 }) {
 }
 
 function syncCronTriggers(config) {
-  const refreshCron = config.vars?.CRON_REFRESH_RATES?.trim() || '0 2 * * *'
-  const scanCron = config.vars?.CRON_SCAN?.trim() || '*/5 * * * *'
-  const autoRenewCron = config.vars?.CRON_AUTO_RENEW?.trim() || '2 * * * *'
-  const reconcileExpiredCron = config.vars?.CRON_RECONCILE_EXPIRED?.trim() || '10 2 * * *'
-
   return {
     ...config,
     triggers: {
       ...(config.triggers ?? {}),
-      crons: [scanCron, autoRenewCron, refreshCron, reconcileExpiredCron]
+      // Dispatch individual CRON_* schedules inside the Worker to share one
+      // account-level Cron Trigger, including when deploying generated config.
+      crons: ['* * * * *']
     }
   }
 }
@@ -234,10 +231,10 @@ async function discoverExistingResources(options = {}) {
   }
 }
 
-async function ensureR2Bucket(config) {
+async function ensureR2Bucket(config, execute = run) {
   for (const bucket of config.r2_buckets ?? []) {
     try {
-      await run('npx', [
+      const result = await execute('npx', [
         'wrangler',
         'r2',
         'bucket',
@@ -246,7 +243,9 @@ async function ensureR2Bucket(config) {
         '--config',
         generatedConfigPath,
         '--update-config=false'
-      ])
+      ], { captureOutput: true })
+      if (result.stdout) process.stdout.write(result.stdout)
+      if (result.stderr) process.stderr.write(result.stderr)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (/already exists/i.test(message)) {
@@ -322,4 +321,4 @@ if (isDirectRun) {
 
 export { applyOptionalBindings, attachExistingResources, bindingResourceName, getInventoryCommands }
 export { canUseInteractiveWranglerLogin, isWranglerAuthError, resolveAppVersion, resolveWorkerName, withProvisionedR2Binding }
-export { syncCronTriggers }
+export { ensureR2Bucket, syncCronTriggers }

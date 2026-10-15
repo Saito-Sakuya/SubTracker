@@ -2,6 +2,17 @@
 
 当前分支只支持 **Cloudflare Worker** 部署。
 
+Worker 只注册一个每分钟执行的 Cron Trigger，按 `CRON_SCAN`、`CRON_AUTO_RENEW`、
+`CRON_RECONCILE_EXPIRED` 和 `CRON_REFRESH_RATES` 在内部调度各任务，减少账户级触发器占用。
+这些变量使用五段式 UTC cron（由 `cron-parser` 解析）；汇率刷新和过期整理仍通过现有的
+应用时区每日 02 点门控。默认提醒每分钟扫描，自动续费在每小时第 2 分钟运行，汇率和
+过期整理分别在每小时第 0、10 分钟检查。任务使用事件的计划时间，单个任务失败不会阻止
+同一分钟其他到期任务运行，错误仍会报告。
+
+若部署出现 Cloudflare 错误 `10072`，表示账户的 Cron Trigger 配额不足。此配置需要一个
+可用名额；如果其他 Worker 已占满账户配额，需要先在 Cloudflare 中整理自己不用的触发器。
+部署失败后重试会复用之前创建的 R2 桶，无需删除桶内已有 Logo。
+
 ## 一、部署方式
 
 推荐方式只有一条：

@@ -16,13 +16,7 @@ import { versionRoutes } from '../routes/version'
 import { ensureDatabaseInitialized } from './database-init'
 import { LegacyFastifyApp, serveStaticLogo } from './legacy-fastify'
 import { runWithRuntimeContext, type WorkerBindings } from '../runtime'
-import { autoRenewDueSubscriptions, reconcileExpiredSubscriptions } from '../services/subscription.service'
-import { scanRenewalNotifications } from '../services/notification.service'
-import { purgeExpiredComputedCache } from '../services/computed-cache-store.service'
-import { refreshExchangeRates } from '../services/exchange-rate.service'
-import { getAppTimezone } from '../services/settings.service'
-import { invalidateWorkerLiteCache } from '../services/worker-lite-cache.service'
-import { runDailyTaskAtLocalHour } from '../services/worker-cron.service'
+import { runWorkerScheduledTasks } from './scheduled'
 import type { D1Database, ExecutionContext, ScheduledController } from './types'
 import { requiresWorkerRuntimeContext } from './request-routing'
 
@@ -116,31 +110,13 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: WorkerBindings, ctx: ExecutionContext) {
+    // Ignore retired triggers while Cloudflare propagates schedule changes.
+    if (controller.cron !== '* * * * *') return
+
     const request = new Request('https://worker.local/__scheduled__')
     await runWithContext(env, request, async () => {
       await bootstrapPromise
-      switch (controller.cron) {
-        case env.CRON_REFRESH_RATES ?? '0 2 * * *':
-          await purgeExpiredComputedCache()
-          await runDailyTaskAtLocalHour('refreshExchangeRates', await getAppTimezone(), 2, new Date(), async () => {
-            await refreshExchangeRates()
-            await invalidateWorkerLiteCache(['exchange-rates', 'statistics', 'calendar'])
-          })
-          break
-        case env.CRON_SCAN ?? '* * * * *':
-          await scanRenewalNotifications(new Date())
-          break
-        case env.CRON_AUTO_RENEW ?? '2 * * * *':
-          await autoRenewDueSubscriptions()
-          break
-        case env.CRON_RECONCILE_EXPIRED ?? '10 2 * * *':
-          await runDailyTaskAtLocalHour('reconcileExpiredSubscriptions', await getAppTimezone(), 2, new Date(), async () => {
-            await reconcileExpiredSubscriptions()
-          })
-          break
-        default:
-          break
-      }
+      await runWorkerScheduledTasks(new Date(Math.floor(controller.scheduledTime / 60_000) * 60_000))
 
       return new Response('ok')
     })

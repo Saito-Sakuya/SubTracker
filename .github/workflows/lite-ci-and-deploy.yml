@@ -24,7 +24,7 @@ jobs:
         id: branch_check
         shell: bash
         run: |
-          if [ "${{ github.ref_name }}" = "lite" ]; then
+          if [ "${{ github.ref_name }}" = "lite" ] || [ "${{ github.base_ref }}" = "lite" ]; then
             echo "run_lite=true" >> "$GITHUB_OUTPUT"
             echo "Running lite workflow for branch: ${{ github.ref_name }}"
           else
@@ -58,6 +58,9 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Test Cloudflare deployment config
+        run: node --test scripts/bootstrap-cloudflare.test.mjs
 
       - name: Build
         env:
