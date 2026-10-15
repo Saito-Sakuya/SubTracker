@@ -1,10 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   applyOptionalBindings,
   attachExistingResources,
   bindingResourceName,
   canUseInteractiveWranglerLogin,
+  ensureR2Bucket,
   getInventoryCommands,
   isWranglerAuthError,
   resolveAppVersion,
@@ -150,8 +152,9 @@ test('applyOptionalBindings leaves d1 untouched when r2 is disabled', () => {
   assert.deepEqual(config.d1_databases, [{ binding: 'DB' }])
 })
 
-test('syncCronTriggers mirrors worker cron vars into deployed triggers', () => {
+test('syncCronTriggers shares one trigger without changing individual job schedules', () => {
   const config = syncCronTriggers({
+    triggers: { crons: ['*/5 * * * *', '2 * * * *', '0 2 * * *', '10 2 * * *'] },
     vars: {
       CRON_SCAN: '*/5 * * * *',
       CRON_AUTO_RENEW: '2 * * * *',
@@ -160,5 +163,35 @@ test('syncCronTriggers mirrors worker cron vars into deployed triggers', () => {
     }
   })
 
-  assert.deepEqual(config.triggers.crons, ['*/5 * * * *', '2 * * * *', '0 2 * * *', '10 2 * * *'])
+  assert.deepEqual(config.triggers.crons, ['* * * * *'])
+  assert.equal(config.vars.CRON_SCAN, '*/5 * * * *')
+  assert.equal(config.vars.CRON_AUTO_RENEW, '2 * * * *')
+  assert.equal(config.vars.CRON_RECONCILE_EXPIRED, '10 2 * * *')
+  assert.equal(config.vars.CRON_REFRESH_RATES, '0 2 * * *')
+})
+
+test('direct and generated Worker deployments both use one Cron Trigger', () => {
+  const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'))
+  assert.deepEqual(config.triggers.crons, ['* * * * *'])
+  assert.deepEqual(syncCronTriggers(config).triggers, config.triggers)
+  assert.deepEqual(syncCronTriggers({}).triggers.crons, ['* * * * *'])
+})
+
+test('R2 provisioning captures errors so retries can reuse a bucket created by a failed deploy', async () => {
+  const config = { r2_buckets: [{ bucket_name: 'subtracker-logos' }] }
+  await ensureR2Bucket(config, async (command, args, options) => {
+    assert.equal(command, 'npx')
+    assert.deepEqual(args.slice(0, 4), ['wrangler', 'r2', 'bucket', 'create'])
+    assert.equal(args[4], 'subtracker-logos')
+    assert.equal(options.captureOutput, true)
+    throw new Error('The bucket you tried to create already exists.')
+  })
+})
+
+test('R2 provisioning still rejects unrelated errors', async () => {
+  const failure = new Error('Authentication error')
+  await assert.rejects(
+    ensureR2Bucket({ r2_buckets: [{ bucket_name: 'subtracker-logos' }] }, async () => { throw failure }),
+    (error) => error === failure
+  )
 })
